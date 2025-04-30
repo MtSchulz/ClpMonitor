@@ -46,4 +46,29 @@
         </div>
     </div>
 
+    <script>
+        document.getElementById("clp-write-form").addEventListener("submit", function(e) {
+        e.preventDefault();
+        console.log("Formulário enviado - Dados:", new FormData(this));
+        
+        fetch('/write-tag', {
+            method: 'POST',
+            body: new FormData(this)
+        })
+        .then(response => {
+            if (!response.ok) throw new Error('Erro no servidor');
+            return response.text();
+        })
+        .then(text => {
+            console.log("Resposta do servidor:", text);
+            // Força atualização da matriz
+            fetch('/manual-refresh', { method: 'POST' });
+        })
+        .catch(error => {
+            console.error("Erro:", error);
+            alert("Erro ao enviar dados: " + error.message);
+        });
+    });
+    </script>
+
 </div>

@@ -1,5 +1,7 @@
 package com.example.clpmonitor.controller;
 
+import java.time.LocalDateTime;
+
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Controller;
@@ -10,6 +12,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import com.example.clpmonitor.model.Tag;
+import com.example.clpmonitor.model.TagLog;
 import com.example.clpmonitor.model.TagWriteRequest;
 import com.example.clpmonitor.plc.PlcConnector;
 import com.example.clpmonitor.service.ClpSimulatorService;
@@ -54,35 +57,61 @@ public class ClpController {
     @PostMapping("/write-tag")
     public String writeTag(@ModelAttribute Tag tag, Model model) {
         try {
+            // Debug: Mostra os dados recebidos
+            System.out.println("[DEBUG] Dados do formulário:");
+            System.out.println("IP: " + tag.getIp());
+            System.out.println("Porta: " + tag.getPort());
+            System.out.println("DB: " + tag.getDb());
+            System.out.println("Tipo: " + tag.getType());
+            System.out.println("Offset: " + tag.getOffset());
+            System.out.println("BitNumber: " + tag.getBitNumber());
+            System.out.println("Size: " + tag.getSize());
+            System.out.println("Valor: " + tag.getValue());
+
+            // Conecta ao CLP
             PlcConnector plc = new PlcConnector(tag.getIp().trim(), tag.getPort());
             plc.connect();
-
+            
             boolean success = false;
+            String operationDetails = "";
 
+            // Executa a operação conforme o tipo
             switch (tag.getType().toUpperCase()) {
                 case "STRING":
                     success = plc.writeString(tag.getDb(), tag.getOffset(), tag.getSize(), tag.getValue().trim());
+                    operationDetails = String.format("DB%d.%d (STRING) = '%s'", tag.getDb(), tag.getOffset(), tag.getValue());
                     break;
+                    
                 case "BLOCK":
                     byte[] bytes = PlcConnector.hexStringToByteArray(tag.getValue().trim());
                     success = plc.writeBlock(tag.getDb(), tag.getOffset(), tag.getSize(), bytes);
+                    operationDetails = String.format("DB%d.%d (BLOCK) = %s", tag.getDb(), tag.getOffset(), java.util.Arrays.toString(bytes));
                     break;
+                    
                 case "FLOAT":
                     success = plc.writeFloat(tag.getDb(), tag.getOffset(), Float.parseFloat(tag.getValue().trim()));
+                    operationDetails = String.format("DB%d.%d (FLOAT) = %.2f", tag.getDb(), tag.getOffset(), Float.parseFloat(tag.getValue()));
                     break;
+                    
                 case "INTEGER":
                     success = plc.writeInt(tag.getDb(), tag.getOffset(), Integer.parseInt(tag.getValue().trim()));
+                    operationDetails = String.format("DB%d.%d (INT) = %d", tag.getDb(), tag.getOffset(), Integer.parseInt(tag.getValue()));
                     break;
+                    
                 case "BYTE":
                     success = plc.writeByte(tag.getDb(), tag.getOffset(), Byte.parseByte(tag.getValue().trim()));
+                    operationDetails = String.format("DB%d.%d (BYTE) = %d", tag.getDb(), tag.getOffset(), Byte.parseByte(tag.getValue()));
                     break;
+                    
                 case "BIT":
                     if (tag.getBitNumber() == null) {
                         throw new IllegalArgumentException("Bit Number é obrigatório para tipo BIT");
                     }
-                    success = plc.writeBit(tag.getDb(), tag.getOffset(), tag.getBitNumber(),
-                            Boolean.parseBoolean(tag.getValue().trim()));
+                    boolean bitValue = Boolean.parseBoolean(tag.getValue().trim());
+                    success = plc.writeBit(tag.getDb(), tag.getOffset(), tag.getBitNumber(), bitValue);
+                    operationDetails = String.format("DB%d.%d.%d = %b", tag.getDb(), tag.getOffset(), tag.getBitNumber(), bitValue);
                     break;
+                    
                 default:
                     throw new IllegalArgumentException("Tipo não suportado: " + tag.getType());
             }
@@ -91,14 +120,21 @@ public class ClpController {
 
             if (success) {
                 model.addAttribute("mensagem", "Escrita no CLP realizada com sucesso!");
+                
+                // Atualização imediata da matriz (para CLP1)
+                if (tag.getIp().equals("10.74.241.10") && tag.getDb() == 9 && tag.getType().equalsIgnoreCase("BYTE")) {
+                    simulatorService.triggerManualUpdate(); // Método público alternativo
+                }
             } else {
                 model.addAttribute("erro", "Erro de escrita no CLP!");
             }
         } catch (Exception ex) {
             model.addAttribute("erro", "Erro: " + ex.getMessage());
+            System.err.println("[ERROR] Erro ao escrever tag: " + ex.getMessage());
+            ex.printStackTrace();
         }
 
-        return "clp-write-fragment"; // ou o nome da sua página que contém o fragmento
+        return "clp-write-fragment";
     }
 
     @GetMapping("/fragmento-formulario")
