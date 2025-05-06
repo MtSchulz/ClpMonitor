@@ -1,7 +1,5 @@
 package com.example.clpmonitor.controller;
 
-import java.time.LocalDateTime;
-
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Controller;
@@ -11,49 +9,52 @@ import org.springframework.web.bind.annotation.ModelAttribute;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+import com.example.clpmonitor.model.Block;
+import com.example.clpmonitor.model.Order;
+import com.example.clpmonitor.model.Storage;
 import com.example.clpmonitor.model.Tag;
-import com.example.clpmonitor.model.TagLog;
 import com.example.clpmonitor.model.TagWriteRequest;
 import com.example.clpmonitor.plc.PlcConnector;
+import com.example.clpmonitor.repository.BlockRepository;
+import com.example.clpmonitor.repository.OrderRepository;
+import com.example.clpmonitor.repository.StorageRepository;
 import com.example.clpmonitor.service.ClpSimulatorService;
+
+import jakarta.transaction.Transactional;
 
 @Controller
 public class ClpController {
 
-    // Injeta automaticamente uma instância da classe ClpSimulatorService.
-    // Essa classe é responsável por simular os dados dos CLPs e gerenciar
-    // os eventos SSE que serão enviados ao frontend.
     @Autowired
     private ClpSimulatorService simulatorService;
 
-    // Mapeia a URL raiz (http://localhost:8080/) para o método index().
-    // Retorna a view index.html, localizada em src/main/resources/templates/index.html (Thymeleaf).
+    @Autowired
+    private BlockRepository blockRepository;
+
+    @Autowired
+    private StorageRepository storageRepository;
+
+    @Autowired
+    private OrderRepository orderRepository;
+
     @GetMapping("/")
     public String index(Model model) {
         model.addAttribute("tag", new TagWriteRequest());
         return "index";
     }
 
-    // Rota "/clp-data-stream" — Comunicação via SSE (Server-Sent Events)
-    // Essa rota é chamada no JavaScript pelo EventSource:
     @GetMapping("/clp-data-stream")
-
-    // Retorna um objeto SseEmitter, que é a classe do Spring para enviar
-    // dados do servidor para o cliente continuamente usando Server-Sent Events.
     public SseEmitter streamClpData() {
-        // Esse método delega a lógica para simulatorService.subscribe() que:
-        //  Cria o SseEmitter.
-        //  Armazena ele numa lista de ouvintes (clientes conectados).
-        //  Inicia o envio periódico dos dados simulados
         return simulatorService.subscribe();
     }
 
     @GetMapping("/write-tag")
     public String showWriteForm(Model model) {
         model.addAttribute("tag", new Tag());
-        return "clp-write-fragment"; // ou o nome da sua página que contém o fragmento
+        return "clp-write-fragment";
     }
 
+    @Transactional
     @PostMapping("/write-tag")
     public String writeTag(@ModelAttribute Tag tag, Model model) {
         try {
@@ -71,7 +72,7 @@ public class ClpController {
             // Conecta ao CLP
             PlcConnector plc = new PlcConnector(tag.getIp().trim(), tag.getPort());
             plc.connect();
-            
+
             boolean success = false;
             String operationDetails = "";
 
@@ -81,28 +82,39 @@ public class ClpController {
                     success = plc.writeString(tag.getDb(), tag.getOffset(), tag.getSize(), tag.getValue().trim());
                     operationDetails = String.format("DB%d.%d (STRING) = '%s'", tag.getDb(), tag.getOffset(), tag.getValue());
                     break;
-                    
+
                 case "BLOCK":
                     byte[] bytes = PlcConnector.hexStringToByteArray(tag.getValue().trim());
                     success = plc.writeBlock(tag.getDb(), tag.getOffset(), tag.getSize(), bytes);
                     operationDetails = String.format("DB%d.%d (BLOCK) = %s", tag.getDb(), tag.getOffset(), java.util.Arrays.toString(bytes));
                     break;
-                    
+
                 case "FLOAT":
                     success = plc.writeFloat(tag.getDb(), tag.getOffset(), Float.parseFloat(tag.getValue().trim()));
                     operationDetails = String.format("DB%d.%d (FLOAT) = %.2f", tag.getDb(), tag.getOffset(), Float.parseFloat(tag.getValue()));
                     break;
-                    
+
                 case "INTEGER":
                     success = plc.writeInt(tag.getDb(), tag.getOffset(), Integer.parseInt(tag.getValue().trim()));
                     operationDetails = String.format("DB%d.%d (INT) = %d", tag.getDb(), tag.getOffset(), Integer.parseInt(tag.getValue()));
+
+                    // Atualiza ordem de produção se for no DB correto
+                    if (tag.getIp().equals("10.74.241.40") && tag.getDb() == 9) {
+                        updateProductionOrder(tag.getOffset(), tag.getValue().trim());
+                    }
                     break;
-                    
+
                 case "BYTE":
-                    success = plc.writeByte(tag.getDb(), tag.getOffset(), Byte.parseByte(tag.getValue().trim()));
-                    operationDetails = String.format("DB%d.%d (BYTE) = %d", tag.getDb(), tag.getOffset(), Byte.parseByte(tag.getValue()));
+                    byte byteValue = Byte.parseByte(tag.getValue().trim());
+                    success = plc.writeByte(tag.getDb(), tag.getOffset(), byteValue);
+                    operationDetails = String.format("DB%d.%d (BYTE) = %d", tag.getDb(), tag.getOffset(), byteValue);
+
+                    // Atualiza cor do bloco no banco de dados
+                    if (tag.getIp().equals("10.74.241.10")) {
+                        updateBlockInDatabase(tag.getDb(), tag.getOffset(), byteValue);
+                    }
                     break;
-                    
+
                 case "BIT":
                     if (tag.getBitNumber() == null) {
                         throw new IllegalArgumentException("Bit Number é obrigatório para tipo BIT");
@@ -111,7 +123,7 @@ public class ClpController {
                     success = plc.writeBit(tag.getDb(), tag.getOffset(), tag.getBitNumber(), bitValue);
                     operationDetails = String.format("DB%d.%d.%d = %b", tag.getDb(), tag.getOffset(), tag.getBitNumber(), bitValue);
                     break;
-                    
+
                 default:
                     throw new IllegalArgumentException("Tipo não suportado: " + tag.getType());
             }
@@ -119,11 +131,11 @@ public class ClpController {
             plc.disconnect();
 
             if (success) {
-                model.addAttribute("mensagem", "Escrita no CLP realizada com sucesso!");
-                
+                model.addAttribute("mensagem", "Escrita no CLP e banco de dados realizada com sucesso!");
+
                 // Atualização imediata da matriz (para CLP1)
                 if (tag.getIp().equals("10.74.241.10") && tag.getDb() == 9 && tag.getType().equalsIgnoreCase("BYTE")) {
-                    simulatorService.triggerManualUpdate(); // Método público alternativo
+                    simulatorService.triggerManualUpdate();
                 }
             } else {
                 model.addAttribute("erro", "Erro de escrita no CLP!");
@@ -137,9 +149,58 @@ public class ClpController {
         return "clp-write-fragment";
     }
 
+    private void updateBlockInDatabase(int dbNumber, int position, int color) {
+        // Obtém o storage correspondente (ajuste conforme sua aplicação)
+        Storage storage = storageRepository.findById(1)
+                .orElseThrow(() -> new RuntimeException("Storage não encontrado"));
+
+        // Verifica se a posição é válida
+        if (position < 0 || position >= storage.getCapacity()) {
+            throw new IllegalArgumentException("Posição inválida: " + position);
+        }
+
+        // Busca ou cria o bloco
+        Block block = blockRepository.findByStorageAndPosition(storage, position)
+                .orElseGet(() -> {
+                    Block newBlock = new Block();
+                    newBlock.setStorage(storage);
+                    newBlock.setPosition(position);
+                    return newBlock;
+                });
+
+        // Atualiza a cor
+        block.setColor(color);
+        blockRepository.save(block);
+    }
+
+    private void updateProductionOrder(int offset, String orderValue) {
+        // Obtém o bloco correspondente ao offset
+        Storage storage = storageRepository.findById(1)
+                .orElseThrow(() -> new RuntimeException("Storage não encontrado"));
+
+        Block block = blockRepository.findByStorageAndPosition(storage, offset)
+                .orElseThrow(() -> new RuntimeException("Bloco não encontrado para offset: " + offset));
+
+        // Cria ou atualiza a ordem de produção
+        if (!orderValue.isEmpty() && !orderValue.equals("0")) {
+            Order order = orderRepository.findByProductionOrder(orderValue)
+                    .orElseGet(() -> {
+                        Order newOrder = new Order();
+                        newOrder.setProductionOrder(orderValue);
+                        return orderRepository.save(newOrder);
+                    });
+
+            block.setProductionOrder(orderValue);
+        } else {
+            block.setProductionOrder(null);
+        }
+
+        blockRepository.save(block);
+    }
+
     @GetMapping("/fragmento-formulario")
     public String carregarFragmentoFormulario(Model model) {
-        model.addAttribute("tag", new TagWriteRequest()); // substitua pelo seu DTO real
+        model.addAttribute("tag", new TagWriteRequest());
         return "fragments/formulario :: clp-write-fragment";
     }
 
@@ -148,8 +209,9 @@ public class ClpController {
         simulatorService.triggerManualUpdate();
         return ResponseEntity.ok("Atualização solicitada");
     }
+}
 
-    /*
+/*
      * Descrição do Funcionamento:
      * 
        1 - O usuário acessa http://localhost:8080/ → o método index() retorna o HTML.
@@ -170,5 +232,4 @@ public class ClpController {
             clp4-data
 
        6 - O JavaScript escuta cada evento separadamente e atualiza a interface conforme os dados recebidos.
-     */
-}
+ */

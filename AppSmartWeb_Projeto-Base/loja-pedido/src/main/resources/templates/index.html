@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+
+<head>
+    <meta charset="UTF-8">
+    <link rel="stylesheet"
+    href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" />
+    <title>Pedidos de Blocos</title>
+    <link rel="stylesheet" th:href="@{/css/style.css}">
+</head>
+
+<body>
+    <h1>Pedido de Blocos</h1>
+
+    <label for="tipoPedido">Tipo de Pedido:</label>
+    <select id="tipoPedido" onchange="renderBlocos()">
+        <option value="simples">Simples (1 bloco)</option>
+        <option value="duplo">Duplo (2 blocos)</option>
+        <option value="triplo">Triplo (3 blocos)</option>
+    </select>
+
+    <div id="blocosContainer"></div>
+
+    <button onclick="enviarPedido()">Enviar Pedido</button>
+
+    <hr>
+
+    <button onclick="listarPedidos()">Listar Pedidos</button>
+    <div>
+        <h2>Pedidos Recebidos</h2>
+    </div>
+    <div id="listaPedidos"></div>
+
+    <script th:src="@{/js/pedido.js}"></script>
+</body>
+
+</html>
